@@ -1,0 +1,71 @@
+# Adds the PHC Pulse module (Track 2 openIMIS Hackathon submission) on top
+# of the standard openimis-dist_dkr stack, so `docker compose up -d` from
+# this directory starts everything in one command.
+#
+# IMPORTANT: this repo's compose.yml uses the `include:` directive, which
+# requires the modern Docker Compose v2 CLI (`docker compose`, space --
+# bundled with Docker Desktop). It will NOT work with the legacy standalone
+# `docker-compose` (hyphenated) binary the handbook's example command
+# implies. Use `docker compose up -d`, not `docker-compose up -d`.
+#
+# Backend: the prebuilt ghcr.io/openimis/openimis-be image already has every
+# standard module installed. We bind-mount our local module source and pip
+# install it at container start, then point OPENIMIS_CONF at a config file
+# (phc_pulse.openimis-runtime.json, this directory) that's the same module
+# list as openimis-be_py/openimis.json but references our module via an
+# absolute in-container path instead of a host-relative one.
+#
+# Frontend: unlike the backend, the frontend image is a static Vite build
+# baked into nginx at build time -- there's no runtime injection mechanism
+# for it. Adding our module genuinely requires a rebuild, so this switches
+# the frontend service from the prebuilt image to a local build using the
+# Dockerfile.phc_pulse fork in openimis-fe_js (adds one COPY step bringing
+# in our local frontend module via a named additional build context).
+#
+# `worker` (Celery) is not overridden -- phc_pulse doesn't define any async
+# tasks yet, so it doesn't need the module.
+#
+# NONE OF THIS HAS BEEN RUN AGAINST A REAL DOCKER ENGINE YET. It's built
+# from reading the actual Dockerfiles/entrypoint.sh scripts in this repo,
+# not from a working build -- verify it end to end as the first thing once
+# Docker is available, and expect to debug it.
+
+services:
+  migrations:
+    volumes:
+      - ../openimis-be-phc_pulse:/phc_pulse
+      - ./phc_pulse.openimis-runtime.json:/openimis-be/phc_pulse.openimis-runtime.json
+    environment:
+      - OPENIMIS_CONF=/openimis-be/phc_pulse.openimis-runtime.json
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >
+        pip install --quiet -e /phc_pulse &&
+        exec /bin/bash /openimis-be/script/entrypoint.sh init
+
+  backend:
+    volumes:
+      - ../openimis-be-phc_pulse:/phc_pulse
+      - ./phc_pulse.openimis-runtime.json:/openimis-be/phc_pulse.openimis-runtime.json
+    environment:
+      - OPENIMIS_CONF=/openimis-be/phc_pulse.openimis-runtime.json
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >
+        pip install --quiet -e /phc_pulse &&
+        exec /bin/bash /openimis-be/script/entrypoint.sh start
+
+  frontend:
+    build:
+      # Context points outside OneDrive (C:\docker-build-temp) rather than the
+      # project's normal location under OneDrive\Desktop -- Docker Desktop's
+      # build-context file sync cannot read OneDrive Files-On-Demand reparse
+      # points ("invalid file request" errors), a known OneDrive/Docker
+      # incompatibility, not a bug in our Dockerfile. Re-sync
+      # C:\docker-build-temp\{openimis-fe_js,openimis-fe-phc_pulse} from the
+      # real source (excluding node_modules/.git) before rebuilding after any
+      # source change.
+      context: C:\docker-build-temp
+      dockerfile: openimis-fe_js/Dockerfile.phc_pulse
+      args:
+        MODE: production
